@@ -1,0 +1,230 @@
+/**
+   Tests for the sequencer lib.
+   Status: Very much still work-in-progress.
+*/
+#include <sequencer.h>
+
+
+#define LED 13s
+unsigned const long MAX_LONG = 4294967295;    // FA: MAX_LONG def. missing
+
+int x = 0;
+int failedTests = 0; // pass
+
+void hello() {
+  x++;
+}
+
+// Some simple test sequences
+SequenceEvent oneEvent[] = {
+  {0, &hello}
+};
+
+SequenceEvent twoEvents[] = {
+  {100000, &hello},
+  {300000, &hello}
+};
+
+void fail(String msg) {           // FA: fail function without line number
+    fail(msg, -1);
+}
+
+void fail(String msg, int line) {  // FA: include line number in fail fun.
+  Serial.print(" FAILED(");
+  Serial.print(line);
+  Serial.print("): ");
+  Serial.println(msg);
+  failedTests++;
+  // TODO: find a way to throw or print a stack trace.
+}
+
+
+void testSequence() {
+  Serial.println("Starting testSequence...");
+  x = 0;
+  Sequence s(oneEvent, 1);
+  s.start();
+  // Nothing should happen before tick
+  if (x != 0) {
+    fail("hello() was called too early", __LINE__);
+  }
+  // Call tick() -- it should trigger a call to hello().
+  s.tick();
+  // check that hello() was called
+  if (x != 1) {
+    fail("Expected 1. Got something else.", __LINE__);
+  }
+}
+
+void testSequence_tickBeforeStart() {
+  Serial.println("Starting testSequence_tickBeforeStart...");
+  x = 0;
+  Sequence s(oneEvent, 1);
+  // Don't call start, just tick a few times.
+  s.tick();
+  s.tick();
+  s.tick();
+  // check that hello() was never called.
+  if (x != 0) {
+    fail("Expected hello() not to be called, but it was called.", __LINE__);
+  }
+}
+
+void testSequence_fakeTime() {
+  Serial.println("Starting testSequence_fakeTime...");
+  x = 0;
+  Sequence s(twoEvents, 2);
+  s.start(1000000);
+  if (x != 0) {
+    fail("hello() should not be called yet.", __LINE__);
+  }
+  s.tick(199999);
+  if (x != 0) {
+    fail("hello() should not be called yet.", __LINE__);
+  }
+  s.tick(1100000);
+  if (x != 1) {
+    fail("hello() should be called once.", __LINE__);
+  }
+  s.tick(1100001);
+  if (x != 1) {
+    fail("hello() should be called once.", __LINE__);
+  }
+  s.tick(1399999);
+  if (x != 1) {
+    fail("hello() should be called once.", __LINE__);
+  }
+  if (!s.running()) {
+    fail("Sequence should still be running.", __LINE__);
+  }
+  s.tick(1400000);
+  if (x != 2) {
+    fail("hello() should be called twice.", __LINE__);
+  }
+  if (s.running()) {
+    fail("Sequence should have stopped running.", __LINE__);
+  }
+}
+
+void testSequence_restart() {
+  Serial.println("Starting testSequence_restart...");
+  x = 0;
+  Sequence s(twoEvents, 2);
+  s.start(0);
+  s.tick(100000);
+  if (x != 1) {
+    fail("hello() should be called once.", __LINE__);
+  }
+  if (!s.running()) {
+    fail("Sequence should still be running.", __LINE__);
+  }
+
+  // Restart the sequence.
+  s.start(200000);
+  if (!s.running()) {   // FA: negation added: (!)
+    fail("Sequence should have stopped running.", __LINE__);
+  }
+  // We should see another event in 100ms.
+  s.tick(299999);
+  if (x != 1) {
+    fail("hello() should be called once.", __LINE__);
+  }
+  s.tick(300000);
+  if (x != 2) {
+    fail("hello() should be called twice.", __LINE__);
+  }
+  // And the next event should happen 300ms later.
+  s.tick(599999);
+  if (x != 2) {
+    fail("hello() should be called twice.", __LINE__);
+  }
+  s.tick(600000);
+  if (x != 3) {
+    fail("hello() should be called three times.", __LINE__);
+  }
+}
+
+void dummy() {};
+
+void testSequence_tailRecursion() {
+  Serial.println("Starting testSequence_tailRecursion...");
+  x = 0;
+  SequenceEvent tailEvents[] = {
+    {1000, &hello},
+    {2000, &dummy}  // Placeholder. Change later.
+  };
+  Sequence s(tailEvents, 2);
+  //tailEvents[1].callback = &s.start;  // TODO: this doesn't work.
+  s.start(0);   // FA: start time changed to 0.
+  s.tick(1000);
+  if (x != 1) {
+    fail("hello() should be called once.", __LINE__);
+  }
+  s.tick(2000);
+  // Sequence should restart.
+  if (!s.running()) {
+    fail("Sequence should still be running.", __LINE__);
+  }
+  // Next event should happen in 1ms.
+  s.tick(2999);
+  if (x != 1) {
+    fail("hello() should be called once.", __LINE__);
+  }
+  s.tick(3000);
+  if (x != 1) {
+    fail("hello() should be called once.", __LINE__);
+  }
+}
+
+void testSequence_overflow() {
+  Serial.println("Starting testSequence_overflow...");
+  x = 0;
+  SequenceEvent events[] = {
+    {10, &hello},
+    {20, &hello}
+  };
+  Sequence s(events, 2);
+  s.start(MAX_LONG - 1);
+  // First event should happen 10us later (after overflow, that is at 8us).
+  s.tick(7);
+  if (x != 0) {
+    fail("hello() should not be called yet.", __LINE__);
+  }
+  s.tick(8);
+  if (x != 1) {
+    fail("hello() should be called once.", __LINE__);
+  }
+  // TODO: next eventj.
+}
+
+void setup() {
+  pinMode(LED, OUTPUT);
+  digitalWrite(LED, LOW);
+  Serial.begin(9600);
+
+  // Run tests methods:
+  testSequence();
+  testSequence_tickBeforeStart();
+  testSequence_fakeTime();
+  testSequence_restart();
+  testSequence_tailRecursion();
+  testSequence_overflow();
+
+  // Summary:
+  Serial.println("Done.");
+  Serial.print(failedTests);
+  Serial.println(" tests failed.");
+}
+
+void loop() {
+  // Blink LED if tests failed.
+  if (failedTests > 0) {
+    digitalWrite(LED, HIGH);
+    delay(250);
+    digitalWrite(LED, LOW);
+    delay(250);
+  } else {
+    digitalWrite(LED, HIGH);
+  }
+}
+
