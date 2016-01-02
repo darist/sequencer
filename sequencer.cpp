@@ -35,19 +35,26 @@ void Sequence::tick(unsigned long time) {
     if (!started) {
         return;
     }
-    long elapsed = time - lastEventTime;                // FA: changed to "long", remove "unsigned"
-    if (elapsed >= (long) events[nextEvent].timeout) {  // FA: changed to >=
-        // Time to fire event:
-        events[nextEvent].callback();
-        
-        // Adavance to next event.
+
+    // Compute elapsed time since the last event (or start).
+    // Note: Using unsigned longs works even in the event of overflow.
+    // eg: if the last event was at ULONG_MAX, and it's now 100, the result of
+    // 100 - ULONG_MAX = 101
+    unsigned long elapsed = time - lastEventTime;
+    if (elapsed >= events[nextEvent].timeout) {  // FA: changed to >=
+        // Time to fire event - update our state first, then fire the event
+        // in case the event affects the state (e.g.: by calling start()).
         lastEventTime = time;
+        int event = nextEvent;
         nextEvent++;
         if (nextEvent >= eventCount) {
             // We are done with all events.
             started = false;
             nextEvent = 0;
         }
+        
+        // Now actually call the event callback.
+        events[event].callback();
     }
 }
 
